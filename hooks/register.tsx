@@ -47,6 +47,12 @@ type Card = {
 };
 type GridLiveLite = { now?: { kind: string; tool?: string; text?: string }; procs?: unknown[] };
 
+declare module "claude-code" {
+	interface PluginState {
+		"agent-grid": { cards: Card[]; live: Record<string, GridLiveLite> };
+	}
+}
+
 type Work = "laptop" | "desktop" | "thinking";
 type Stage =
 	| { kind: "idle"; since: number }
@@ -156,6 +162,28 @@ function rest(c: Clawd, now: number) {
 	else c.stage = idle(now);
 }
 
+function stumble(c: Clawd, now: number): boolean {
+	const s = c.stage;
+	const back =
+		s.kind === "work"
+			? { ...s, resume: true }
+			: s.kind === "once" && s.then.kind === "work" && !STUMBLES.includes(s.move)
+				? s.then
+				: undefined;
+	if (back) c.stage = { kind: "once", move: pick(STUMBLES), at: now, then: back };
+	return back !== undefined;
+}
+
+function glance(c: Clawd, now: number) {
+	if (now - c.lookedAt <= 15_000) return;
+	const s = c.stage;
+	const move = pick(LOOKS);
+	if (s.kind === "idle") c.stage = { kind: "once", move, at: now, then: s };
+	else if (s.kind === "work" && now - s.at >= SETTLE_MS)
+		c.stage = { kind: "once", move, at: now, then: { ...s, resume: true } };
+	if (c.stage.kind === "once" && c.stage.move === move) c.lookedAt = now;
+}
+
 export function desiredOf(lv: GridLiveLite | undefined): Work | "look" | undefined {
 	const n = lv?.now;
 	if (n?.kind === "tool") {
@@ -172,7 +200,7 @@ export function desiredOf(lv: GridLiveLite | undefined): Work | "look" | undefin
 
 function decide(c: Clawd, now: number, since: number) {
 	const r = Math.random();
-	const rest = idle(since);
+	const after = idle(since);
 	const ways = crowded()
 		? []
 		: everyone().flatMap((o) =>
@@ -184,10 +212,10 @@ function decide(c: Clawd, now: number, since: number) {
 	const long = free.filter((x) => Math.abs(x - c.x) >= 16);
 	const far = long.length ? long : free.filter((x) => Math.abs(x - c.x) >= 4);
 	const back = free.reduce((a, b) => (Math.abs(b - home()) < Math.abs(a - home()) ? b : a), c.x);
-	if (c === main && Math.abs(back - c.x) > 12 && r < 0.3) walkTo(c, now, back, rest);
+	if (c === main && Math.abs(back - c.x) > 12 && r < 0.3) walkTo(c, now, back, after);
 	else if (r < (c === main ? 0.6 : 0.7) && far.length)
-		walkTo(c, now, far[Math.floor(Math.random() * far.length)] as number, rest);
-	else c.stage = { kind: "once", move: pick(FLOURISHES), at: now, then: rest };
+		walkTo(c, now, far[Math.floor(Math.random() * far.length)] as number, after);
+	else c.stage = { kind: "once", move: pick(FLOURISHES), at: now, then: after };
 }
 
 /** His frame at `now` (null once he is gone) and how long until it (or his place) changes; moves him along. */
@@ -272,36 +300,19 @@ function muster(cards: Card[], now: number) {
 function liven(cards: Card[], live: Record<string, GridLiveLite>, now: number) {
 	for (const c of crew.values()) {
 		const card = cards.find((k) => k.id === c.id);
-		if (!card || card.status !== "running" || c.leaving) continue;
+		if (card?.status !== "running" || c.leaving) continue;
 		const errs = card.failed ?? (card.lines ?? []).filter((l) => l.isError).length;
 		c.errors ??= errs;
 		if (c.stage.kind === "once" && c.stage.move === "wave") continue;
 		const seen = c.errors;
 		c.errors = errs;
-		if (errs > seen) {
-			const t = c.stage;
-			const back =
-				t.kind === "work"
-					? { ...t, resume: true }
-					: t.kind === "once" && t.then.kind === "work" && !STUMBLES.includes(t.move)
-						? t.then
-						: undefined;
-			if (back) {
-				c.stage = { kind: "once", move: pick(STUMBLES), at: now, then: back };
-				c.activeAt = now;
-				continue;
-			}
+		if (errs > seen && stumble(c, now)) {
+			c.activeAt = now;
+			continue;
 		}
 		const want = desiredOf(live[c.id]);
 		if (want === "look") {
-			if (now - c.lookedAt > 15_000) {
-				const s = c.stage;
-				const g = pick(LOOKS);
-				if (s.kind === "idle") c.stage = { kind: "once", move: g, at: now, then: s };
-				else if (s.kind === "work" && now - s.at >= SETTLE_MS)
-					c.stage = { kind: "once", move: g, at: now, then: { ...s, resume: true } };
-				if (c.stage.kind === "once" && c.stage.move === g) c.lookedAt = now;
-			}
+			glance(c, now);
 			c.activeAt = now;
 		} else if (want) {
 			if (c.doing !== want) {
@@ -439,12 +450,12 @@ export function layout(placed: Placed[]): Run[] {
 }
 
 /** `tree` (a Box) with `layer` added to its children and room for his height; null for anything else. */
-function onto(tree: unknown, layer: RenderElement[]): any {
+function onto(tree: unknown, layer: RenderElement[]): RenderElement | null {
 	const t = tree as { type?: string; props?: Record<string, unknown>; children?: unknown[] };
 	if (t?.type !== "Box") return null;
 	const kids = (t.children ?? (t.props?.children as unknown[] | undefined) ?? []) as unknown[];
 	const minHeight = Math.max(Number(t.props?.minHeight) || 0, ROWS);
-	return { ...t, props: { ...t.props, minHeight }, children: [...kids, ...layer] };
+	return { ...t, props: { ...t.props, minHeight }, children: [...kids, ...layer] } as RenderElement;
 }
 
 export const register: Register = (on) => {
@@ -464,28 +475,13 @@ export const register: Register = (on) => {
 		if (e.agentId !== undefined) return next(e);
 		const tool = String(e.tool);
 		const now = await $.clock.now();
-		const s = main.stage;
 		if (WRITE.has(tool)) work(main, now, "laptop");
 		else if (RUN.has(tool)) work(main, now, "desktop");
-		else if (READ.has(tool) && now - main.lookedAt > 15_000) {
-			const g = pick(LOOKS);
-			if (s.kind === "idle") main.stage = { kind: "once", move: g, at: now, then: s };
-			else if (s.kind === "work" && now - s.at >= SETTLE_MS)
-				main.stage = { kind: "once", move: g, at: now, then: { ...s, resume: true } };
-			if (main.stage.kind === "once" && main.stage.move === g) main.lookedAt = now;
-		}
+		else if (READ.has(tool)) glance(main, now);
 		$.ui.invalidate("ui.render");
 		const result = await next(e);
 		if ((result as { isError?: boolean }).isError) {
-			const then = await $.clock.now();
-			const t = main.stage;
-			const back =
-				t.kind === "work"
-					? { ...t, resume: true }
-					: t.kind === "once" && t.then.kind === "work" && !STUMBLES.includes(t.move)
-						? t.then
-						: undefined;
-			if (back) main.stage = { kind: "once", move: pick(STUMBLES), at: then, then: back };
+			stumble(main, await $.clock.now());
 			$.ui.invalidate("ui.render");
 		}
 		return result;
@@ -518,10 +514,10 @@ export const register: Register = (on) => {
 				c.x = c === main && c.x < 0 ? home() : Math.min(c.x, maxX());
 			}
 		}
-		const cards = ((await $.state.get(CARDS as any).catch(() => undefined))?.value ?? []) as Card[];
+		const cards = (await $.state.get(CARDS).catch(() => undefined))?.value ?? [];
 		const shown = cards.filter((c) => c.kind !== "workflow" || !cards.some((a) => a.run === c.id));
 		muster(shown, now);
-		const live = ((await $.state.get(LIVE as any).catch(() => undefined))?.value ?? {}) as Record<string, GridLiveLite>;
+		const live = (await $.state.get(LIVE).catch(() => undefined))?.value ?? {};
 		liven(shown, live, now);
 		for (const c of everyone())
 			if (c.stage.kind === "idle" && c.flourishAt > 0 && now - c.flourishAt > 2000)
@@ -531,16 +527,16 @@ export const register: Register = (on) => {
 		let wait = Infinity;
 		const placed: Placed[] = [];
 		for (const c of [...crew.values(), main]) {
-			const shown = frameAt(c, now);
-			if (!shown) {
+			const pose = frameAt(c, now);
+			if (!pose) {
 				crew.delete(c.id);
 				continue;
 			}
-			wait = Math.min(wait, shown.wait);
+			wait = Math.min(wait, pose.wait);
 			placed.push({
 				id: c.id,
 				paint: c.paint,
-				frame: shown.frame,
+				frame: pose.frame,
 				left: c.mirror ? Math.ceil(c.x / 2) : Math.floor(c.x / 2),
 				mirror: c.mirror,
 			});
