@@ -1,0 +1,17 @@
+{
+	"name": "clawd",
+	"private": true,
+	"scripts": {
+		"lint": "biome check .",
+		"format": "biome check --write .",
+		"typecheck": "[ -n \"$CI\" ] || tsc -p .",
+		"validate": "[ -n \"$CI\" ] || claude plugin validate .",
+		"test": "[ -n \"$CI\" ] || claude plugin test .",
+		"verify": "yarn lint && yarn typecheck && yarn validate && yarn test"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.6.3",
+		"typescript": "^7.0.2"
+	},
+	"packageManager": "yarn@1.22.22"
+}

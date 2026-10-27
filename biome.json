@@ -1,7 +1,7 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
 	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-	"files": { "includes": ["**/*.ts", "**/*.tsx", "!hooks/frames.ts", "!.claude-plugin/types"] },
+	"files": { "includes": ["**", "!**/*.md", "!hooks/frames.ts"] },
 	"formatter": { "indentStyle": "tab", "lineWidth": 120 },
 	"javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always" } },
 	"linter": { "rules": { "preset": "recommended", "suspicious": { "noThenProperty": "off" } } },
