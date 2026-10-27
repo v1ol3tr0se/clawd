@@ -1,0 +1,16 @@
+{
+  "name": "clawd",
+  "owner": {
+    "name": "v1ol3tr0se"
+  },
+  "metadata": {
+    "description": "Clawd, the Claude desktop app's pixel crab, in the band above the prompt: laptop while Claude edits, monitor for commands, cheers and facepalms; with agent-grid, one more Clawd per running agent."
+  },
+  "plugins": [
+    {
+      "name": "clawd",
+      "source": "./",
+      "description": "Clawd, the Claude desktop app's pixel crab, in the band above the prompt: laptop while Claude edits, monitor for commands, cheers and facepalms; with agent-grid, one more Clawd per running agent."
+    }
+  ]
+}
